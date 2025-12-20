@@ -19,24 +19,26 @@ const firewall = new gcp.compute.Firewall("allow-ssh", {
         protocol: "tcp",
         ports: ["22"],
     }],
-    sourceRanges: ["0.0.0.0/0"], // En producción, limita esto a tu IP
+    sourceRanges: ["0.0.0.0/0"],
+    targetTags: ["ssh-enabled"], 
 });
 
 // 4. Crear la Instancia de VM
 const vmInstance = new gcp.compute.Instance("web-server", {
-    machineType: "f1-micro", // Tipo de máquina económica. GB: 0.6
+    machineType: "e2-medium", // Memoria: 4 GB, vCPUs: 2
     zone: "us-central1-a",
+    tags: ["ssh-enabled"], // Aplicar el tag para el firewall
     
     bootDisk: {
         initializeParams: {
             image: "debian-cloud/debian-11",
+            size: 20, 
         },
     },
 
     networkInterfaces: [{
         network: vpc.id,
         subnetwork: subnet.id,
-        // AccessConfig vacío habilita una IP pública efímera
         accessConfigs: [{}], 
     }],
 
@@ -47,3 +49,4 @@ const vmInstance = new gcp.compute.Instance("web-server", {
 // Exportar la IP pública de la instancia
 export const publicIp = vmInstance.networkInterfaces.apply(ni => ni[0].accessConfigs![0].natIp);
 export const instanceName = vmInstance.name;
+export const firewallName = firewall.name;
