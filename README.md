@@ -54,3 +54,9 @@ python client.py
 ```
 
 
+## Terminal 3: Download Model Trained
+
+- After training is complete
+```sh
+gcloud compute scp smogollon@ml-server-b010e71:~/mpnet_fed_requirements.pth ./ --zone us-central1-a
+```

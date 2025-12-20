@@ -3,6 +3,7 @@ from flwr.server import strategy
 from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import warnings
+import torch
 warnings.filterwarnings('ignore')
 
 # ====================================================
@@ -17,36 +18,36 @@ class FederatedAverageCustom(strategy.FedAvg):
         )
     
     def aggregate_fit(self, server_round, results, failures):
-        """Agregar parámetros usando promedio ponderado"""
-        if not results:
-            return None, {}
-        
-        # Convertir resultados (ClientProxy, FitRes) a la estructura que esperas
-        # FitRes contiene: parameters, num_examples, metrics, status
-        actual_results = [
-            (fl.common.parameters_to_ndarrays(res.parameters), res.num_examples)
-            for _, res in results
-        ]
-        
-        # Calcular pesos basados en número de muestras
-        weights = [num_examples for _, num_examples in actual_results]
-        total_samples = sum(weights)
-        
-        # Normalizar pesos
-        weights_normalized = [w / total_samples for w in weights]
-        
-        # Promedio ponderado de parámetros
-        aggregated_parameters = []
-        # Tomamos la estructura del primer resultado como base
-        for i in range(len(actual_results[0][0])):
-            layer_params = []
-            for (parameters, _), weight in zip(actual_results, weights_normalized):
-                layer_params.append(parameters[i] * weight)
-            aggregated_layer = np.sum(layer_params, axis=0)
-            aggregated_parameters.append(aggregated_layer)
-        
-        # Convertir de vuelta a Parameters para Flower
-        return fl.common.ndarrays_to_parameters(aggregated_parameters), {}
+        # 1. Llamamos a la lógica de agregación que ya teníamos
+        aggregated_parameters, metrics = super().aggregate_fit(server_round, results, failures)
+
+        if aggregated_parameters is not None:
+            # 2. Si es la última ronda (Ronda 3), guardamos el modelo
+            if server_round == 3:
+                print("\n" + "*"*30)
+                print("GUARDANDO MODELO GLOBAL FINAL...")
+                print("*"*30)
+                
+                # Convertir parámetros agregados a tensores de PyTorch
+                # Primero convertimos de Parameters a lista de ndarrays
+                ndarrays = fl.common.parameters_to_ndarrays(aggregated_parameters)
+                
+                # Cargamos una estructura de modelo limpia de MPNet
+                from transformers import AutoModelForSequenceClassification
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    "microsoft/mpnet-base", num_labels=2
+                )
+                
+                # Cargamos los pesos promediados en el modelo
+                params_dict = zip(model.state_dict().keys(), ndarrays)
+                state_dict = {k: torch.tensor(v) for k, v in params_dict}
+                model.load_state_dict(state_dict, strict=True)
+                
+                # Guardamos el modelo completo o solo los pesos
+                torch.save(model.state_dict(), "mpnet_fed_requirements.pth")
+                print("¡Modelo guardado exitosamente como 'mpnet_fed_requirements.pth'!")
+
+        return aggregated_parameters, metrics
     
     def aggregate_evaluate(self, server_round, results, failures):
         """Agregar métricas de evaluación"""
