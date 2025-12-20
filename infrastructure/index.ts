@@ -27,7 +27,6 @@ const vmInstance = new gcp.compute.Instance("ml-server", {
     machineType: "e2-standard-4", // 4 vCPUs y 16GB RAM (Sin GPU)
     zone: "us-central1-a",
     tags: ["server-node"],
-    // ELIMINA guestAccelerators y scheduling
     bootDisk: {
         initializeParams: {
             image: "debian-cloud/debian-11",
