@@ -21,8 +21,15 @@ class FederatedAverageCustom(strategy.FedAvg):
         if not results:
             return None, {}
         
+        # Convertir resultados (ClientProxy, FitRes) a la estructura que esperas
+        # FitRes contiene: parameters, num_examples, metrics, status
+        actual_results = [
+            (fl.common.parameters_to_ndarrays(res.parameters), res.num_examples)
+            for _, res in results
+        ]
+        
         # Calcular pesos basados en número de muestras
-        weights = [num_examples for _, num_examples, _ in results]
+        weights = [num_examples for _, num_examples in actual_results]
         total_samples = sum(weights)
         
         # Normalizar pesos
@@ -30,35 +37,37 @@ class FederatedAverageCustom(strategy.FedAvg):
         
         # Promedio ponderado de parámetros
         aggregated_parameters = []
-        for i in range(len(results[0][0])):
+        # Tomamos la estructura del primer resultado como base
+        for i in range(len(actual_results[0][0])):
             layer_params = []
-            for (parameters, _, _), weight in zip(results, weights_normalized):
+            for (parameters, _), weight in zip(actual_results, weights_normalized):
                 layer_params.append(parameters[i] * weight)
             aggregated_layer = np.sum(layer_params, axis=0)
             aggregated_parameters.append(aggregated_layer)
         
-        return aggregated_parameters, {}
+        # Convertir de vuelta a Parameters para Flower
+        return fl.common.ndarrays_to_parameters(aggregated_parameters), {}
     
     def aggregate_evaluate(self, server_round, results, failures):
         """Agregar métricas de evaluación"""
         if not results:
             return None, {}
         
-        # Calcular métricas agregadas
+        # Results es una lista de (ClientProxy, EvaluateRes)
+        # EvaluateRes contiene: loss, num_examples, metrics, status
         total_loss = 0
         total_samples = 0
         total_accuracy = 0
         
-        for loss, num_examples, metrics in results:
-            total_loss += loss * num_examples
-            total_samples += num_examples
-            if "accuracy" in metrics:
-                total_accuracy += metrics["accuracy"] * num_examples
+        for _, res in results:
+            total_loss += res.loss * res.num_examples
+            total_samples += res.num_examples
+            if "accuracy" in res.metrics:
+                total_accuracy += res.metrics["accuracy"] * res.num_examples
         
         aggregated_loss = total_loss / total_samples if total_samples > 0 else 0
         aggregated_accuracy = total_accuracy / total_samples if total_samples > 0 else 0
         
-        # Devolver métricas
         metrics_aggregated = {
             "loss": aggregated_loss,
             "accuracy": aggregated_accuracy
@@ -95,9 +104,9 @@ def main():
     strategy = FederatedAverageCustom(
         fraction_fit=1.0,  # Usar todos los clientes disponibles para entrenamiento
         fraction_evaluate=1.0,  # Usar todos los clientes para evaluación
-        min_fit_clients=2,  # Mínimo 2 clientes para entrenamiento
-        min_evaluate_clients=2,  # Mínimo 2 clientes para evaluación
-        min_available_clients=2,  # Esperar al menos 2 clientes
+        min_fit_clients=1,  # Mínimo 2 clientes para entrenamiento
+        min_evaluate_clients=1,  # Mínimo 2 clientes para evaluación
+        min_available_clients=1,  # Esperar al menos 2 clientes
         evaluate_fn=get_evaluate_fn(),  # Función de evaluación global
         on_fit_config_fn=lambda rnd: {"epochs": 1},  # 1 época por ronda
         on_evaluate_config_fn=lambda rnd: {"batch_size": 32},

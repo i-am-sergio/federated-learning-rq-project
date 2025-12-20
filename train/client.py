@@ -50,11 +50,18 @@ def preparar_datasets(df, tokenizer):
     
     dataset = Dataset.from_pandas(df)
     tokenized_dataset = dataset.map(tokenize_function, batched=True)
-    tokenized_dataset = tokenized_dataset.remove_columns(["RequirementText", "class"])
-    tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
+    
+    columnas_a_mantener = ["input_ids", "attention_mask", "labels"]
+    columnas_actuales = tokenized_dataset.column_names
+    columnas_a_eliminar = [c for c in columnas_actuales if c not in columnas_a_mantener and c != "label"]
+    
+    tokenized_dataset = tokenized_dataset.remove_columns(columnas_a_eliminar)
+    
+    if "label" in tokenized_dataset.column_names:
+        tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
+    
     tokenized_dataset.set_format("torch")
     
-    # Crear DataLoader
     trainloader = DataLoader(tokenized_dataset, batch_size=32, shuffle=True)
     return trainloader
 
@@ -176,10 +183,12 @@ def main():
     else:
         client_id = CLIENT_ID
     
+    SERVER_PUBLIC_IP = "<PUBLIC_IP>"
+
     # Iniciar cliente
     client = FederatedClient(client_id)
-    fl.client.start_numpy_client(
-        server_address="localhost:8080",
+    fl.client.start_client(
+        server_address=f"{SERVER_PUBLIC_IP}:8080",
         client=client
     )
 

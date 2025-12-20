@@ -24,7 +24,7 @@ if torch.cuda.is_available():
 
 def cargar_datos():
     # df = pd.read_csv('../PROMISE_extended6.csv')
-    df = pd.read_csv('promise_nfr.csv')
+    df = pd.read_csv('../promise_nfr.csv')
     df['class'] = df['class'].apply(lambda x: 'F' if x == 'F' else 'NF')
     return df
 
