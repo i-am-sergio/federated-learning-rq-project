@@ -1,52 +1,46 @@
 import * as gcp from "@pulumi/gcp";
 
-// 1. Crear una Red VPC personalizada
+// 1. Red y 2. Subred (Sin cambios)
 const vpc = new gcp.compute.Network("vpc-network", {
     autoCreateSubnetworks: false,
 });
 
-// 2. Crear una Subred en una región específica
 const subnet = new gcp.compute.Subnetwork("vpc-subnet", {
     ipCidrRange: "10.0.1.0/24",
     region: "us-central1",
     network: vpc.id,
 });
 
-// 3. Configurar Firewall para permitir SSH (puerto 22)
-const firewall = new gcp.compute.Firewall("allow-ssh", {
+// 3. Firewall (Puerto 22 y 8080 para Flower)
+const firewall = new gcp.compute.Firewall("allow-ssh-flower", {
     network: vpc.id,
     allows: [{
         protocol: "tcp",
-        ports: ["22"],
+        ports: ["22", "8080"],
     }],
     sourceRanges: ["0.0.0.0/0"],
-    targetTags: ["ssh-enabled"], 
+    targetTags: ["server-node"], 
 });
 
-// 4. Crear la Instancia de VM
-const vmInstance = new gcp.compute.Instance("web-server", {
-    machineType: "e2-medium", // Memoria: 4 GB, vCPUs: 2
+// 4. Instancia de VM 
+const vmInstance = new gcp.compute.Instance("ml-server", {
+    machineType: "e2-standard-4", // 4 vCPUs y 16GB RAM (Sin GPU)
     zone: "us-central1-a",
-    tags: ["ssh-enabled"], // Aplicar el tag para el firewall
-    
+    tags: ["server-node"],
+    // ELIMINA guestAccelerators y scheduling
     bootDisk: {
         initializeParams: {
             image: "debian-cloud/debian-11",
-            size: 20, 
+            size: 50, // Disco de 50GB 
         },
     },
-
     networkInterfaces: [{
         network: vpc.id,
         subnetwork: subnet.id,
         accessConfigs: [{}], 
     }],
-
-    // Script de inicio opcional
-    metadataStartupScript: "echo 'Hola desde Pulumi' > /var/www/html/index.html",
 });
 
-// Exportar la IP pública de la instancia
 export const publicIp = vmInstance.networkInterfaces.apply(ni => ni[0].accessConfigs![0].natIp);
 export const instanceName = vmInstance.name;
 export const firewallName = firewall.name;
