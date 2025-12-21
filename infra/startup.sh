@@ -12,7 +12,9 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install flwr==1.5.0
 pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install transformers datasets pandas numpy scikit-learn fastapi uvicorn
+pip install transformers datasets pandas numpy scikit-learn fastapi uvicorn google-cloud-storage
+
+export MODEL_BUCKET_NAME="{{BUCKET_NAME}}"
 
 cat << 'EOF' > server.py
 {{SERVER_CODE}}

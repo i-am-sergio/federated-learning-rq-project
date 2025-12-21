@@ -1,3 +1,0 @@
-functions-framework==3.*
-torch --index-url https://download.pytorch.org/whl/cpu
-transformers

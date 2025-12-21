@@ -1,12 +1,20 @@
 import * as gcp from "@pulumi/gcp";
-import * as docker from "@pulumi/docker"; // <--- NUEVO IMPORT
+import * as docker from "@pulumi/docker";
 import * as pulumi from "@pulumi/pulumi";
 import * as fs from "fs";
 import * as path from "path";
 
+const modelsBucket = new gcp.storage.Bucket("models-bucket", {
+  location: "US",
+  forceDestroy: true,
+  versioning: {
+    enabled: true,
+  },
+});
+
 // 1. LEER ARCHIVOS DE CÓDIGO
-const serverCodePath = path.resolve(__dirname, "../train/server.py");
-const inferenceCodePath = path.resolve(__dirname, "../train/inference_api.py");
+const serverCodePath = path.resolve(__dirname, "../app/server.py");
+const inferenceCodePath = path.resolve(__dirname, "../app/inference_api.py");
 const startupScriptPath = path.resolve(__dirname, "startup.sh");
 
 const serverCode = fs.readFileSync(serverCodePath, "utf-8");
@@ -14,13 +22,11 @@ const inferenceCode = fs.readFileSync(inferenceCodePath, "utf-8");
 const rawStartupScript = fs.readFileSync(startupScriptPath, "utf-8");
 
 // 2. PREPARAR STARTUP SCRIPT
-let finalStartupScript = rawStartupScript.replace(
-  "{{SERVER_CODE}}",
-  serverCode
-);
-finalStartupScript = finalStartupScript.replace(
-  "{{INFERENCE_CODE}}",
-  inferenceCode
+let tempScript = rawStartupScript
+  .replace("{{SERVER_CODE}}", serverCode)
+  .replace("{{INFERENCE_CODE}}", inferenceCode);
+const finalStartupScript = modelsBucket.name.apply((bucketName) =>
+  tempScript.replace("{{BUCKET_NAME}}", bucketName)
 );
 
 // --- INFRAESTRUCTURA DE RED ---
@@ -68,7 +74,7 @@ const vmInstance = new gcp.compute.Instance("ml-server", {
   ],
   metadataStartupScript: finalStartupScript,
   serviceAccount: {
-    scopes: ["https://www.googleapis.com/auth/cloud-platform"], // Permisos para logs y storage
+    scopes: ["https://www.googleapis.com/auth/cloud-platform"],
   },
 });
 
@@ -78,24 +84,19 @@ const vmPublicIp = vmInstance.networkInterfaces.apply(
 export const backendIp = vmPublicIp;
 
 // --- CLOUD RUN (FRONTEND) ---
-
-// 1. Construir y Subir la Imagen Docker (Usando @pulumi/docker)
-// Esto requiere que tengas Docker corriendo en tu PC local
 const frontendImage = new docker.Image("frontend-image", {
   imageName: pulumi.interpolate`gcr.io/${gcp.config.project}/frontend-chat:v1`,
   build: {
-    context: "../frontend", // Ruta a tu carpeta frontend
+    context: "../frontend",
   },
 });
-
-// 2. Servicio de Cloud Run
 const runService = new gcp.cloudrun.Service("frontend-chat", {
   location: "us-central1",
   template: {
     spec: {
       containers: [
         {
-          image: frontendImage.imageName, // Usamos la imagen construida arriba
+          image: frontendImage.imageName,
           envs: [
             {
               name: "VM_API_URL",
@@ -128,3 +129,4 @@ const iam = new gcp.cloudrun.IamMember("frontend-public", {
 });
 
 export const frontendUrl = runService.statuses[0].url;
+export const bucketName = modelsBucket.url;

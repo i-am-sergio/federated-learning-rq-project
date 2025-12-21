@@ -4,6 +4,10 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import warnings
 import torch
+import requests
+import time
+import os
+from google.cloud import storage
 warnings.filterwarnings('ignore')
 
 # ====================================================
@@ -18,44 +22,51 @@ class FederatedAverageCustom(strategy.FedAvg):
         )
     
     def aggregate_fit(self, server_round, results, failures):
-        # 1. Llamamos a la lógica de agregación que ya teníamos
         aggregated_parameters, metrics = super().aggregate_fit(server_round, results, failures)
 
         if aggregated_parameters is not None:
-            # 2. Si es la última ronda (Ronda 3), guardamos el modelo
             if server_round == 3:
                 print("\n" + "*"*30)
                 print("GUARDANDO MODELO GLOBAL FINAL...")
                 print("*"*30)
-                
-                # Convertir parámetros agregados a tensores de PyTorch
-                # Primero convertimos de Parameters a lista de ndarrays
                 ndarrays = fl.common.parameters_to_ndarrays(aggregated_parameters)
-                
-                # Cargamos una estructura de modelo limpia de MPNet
                 from transformers import AutoModelForSequenceClassification
                 model = AutoModelForSequenceClassification.from_pretrained(
                     "microsoft/mpnet-base", num_labels=2
                 )
-                
-                # Cargamos los pesos promediados en el modelo
                 params_dict = zip(model.state_dict().keys(), ndarrays)
                 state_dict = {k: torch.tensor(v) for k, v in params_dict}
                 model.load_state_dict(state_dict, strict=True)
                 
-                # Guardamos el modelo completo o solo los pesos
                 torch.save(model.state_dict(), "mpnet_fed_requirements.pth")
-                print("¡Modelo guardado exitosamente como 'mpnet_fed_requirements.pth'!")
-
+                print("Modelo guardado exitosamente como 'mpnet_fed_requirements.pth'")
+                
+                bucket_name = os.environ.get("MODEL_BUCKET_NAME")
+                if bucket_name:
+                    print(f"Subiendo modelo a Bucket: {bucket_name}...")
+                    try:
+                        storage_client = storage.Client()
+                        bucket = storage_client.bucket(bucket_name)
+                        blob = bucket.blob("mpnet_fed_requirements.pth")
+                        blob.upload_from_filename("mpnet_fed_requirements.pth")
+                        print("Modelo subido exitosamente a GCS (Versión guardada).")
+                    except Exception as e:
+                        print(f"Error subiendo a GCS: {e}")
+                
+                print("Notificando a la API de Inferencia para recarga...")
+                try:
+                    response = requests.post("http://127.0.0.1:8000/reload_model")
+                    if response.status_code == 200:
+                        print(f"ÉXITO: {response.json()}")
+                    else:
+                        print(f"Error en recarga: {response.text}")
+                except Exception as e:
+                    print(f"No se pudo contactar a la API: {e}")
         return aggregated_parameters, metrics
     
     def aggregate_evaluate(self, server_round, results, failures):
-        """Agregar métricas de evaluación"""
         if not results:
             return None, {}
-        
-        # Results es una lista de (ClientProxy, EvaluateRes)
-        # EvaluateRes contiene: loss, num_examples, metrics, status
         total_loss = 0
         total_samples = 0
         total_accuracy = 0
@@ -69,12 +80,7 @@ class FederatedAverageCustom(strategy.FedAvg):
         aggregated_loss = total_loss / total_samples if total_samples > 0 else 0
         aggregated_accuracy = total_accuracy / total_samples if total_samples > 0 else 0
         
-        metrics_aggregated = {
-            "loss": aggregated_loss,
-            "accuracy": aggregated_accuracy
-        }
-        
-        return aggregated_loss, metrics_aggregated
+        return aggregated_loss, {"loss": aggregated_loss, "accuracy": aggregated_accuracy}
 
 # ====================================================
 # FUNCIÓN DE EVALUACIÓN GLOBAL
@@ -82,18 +88,12 @@ class FederatedAverageCustom(strategy.FedAvg):
 def get_evaluate_fn():
     """Función para evaluación global del modelo"""
     def evaluate(server_round, parameters, config):
-        # En un caso real, aquí evaluarías el modelo global en un dataset de prueba
-        # Por ahora, retornamos valores dummy
         print(f"\n{'='*50}")
         print(f"Ronda del servidor: {server_round}")
         print(f"Parámetros recibidos para evaluación")
         print(f"{'='*50}")
-        
-        # Aquí podrías cargar un dataset de prueba y evaluar el modelo
-        # Por simplicidad, retornamos valores por defecto
         loss = 0.5  # Valor dummy
         accuracy = 0.5  # Valor dummy
-        
         return loss, {"accuracy": accuracy}
     return evaluate
 
@@ -125,12 +125,12 @@ def main():
     print(f"Esperando clientes en: localhost:8080")
     print("="*60 + "\n")
     
-    # Iniciar servidor
+    
     fl.server.start_server(
         server_address="0.0.0.0:8080",
         config=config,
         strategy=strategy,
-        grpc_max_message_length=1024*1024*1024  # 1GB para modelos grandes
+        grpc_max_message_length=1024*1024*1024 
     )
 
 if __name__ == "__main__":

@@ -1,147 +1,226 @@
-# federated-learning-rq-project
+# Federated Learning - Requirements Classification Project
+
+Este proyecto implementa un sistema completo de **Aprendizaje Federado (Federated Learning)** para entrenar un modelo de Procesamiento de Lenguaje Natural (NLP) basado en **MPNet**. El objetivo es clasificar requisitos de software en **Funcionales (F)** y **No Funcionales (NF)** de manera colaborativa, preservando la privacidad de los datos de los clientes.
+
+El sistema utiliza una arquitectura híbrida con **Google Cloud Platform (GCP)** para el servidor central y la infraestructura, y clientes locales que entrenan con sus propios datos. Todo el despliegue está automatizado mediante **Infrastructure as Code (IaC)** con Pulumi.
+
+## Estructura del Proyecto
+
+El proyecto está organizado de la siguiente manera para separar la lógica de infraestructura, servidor y cliente:
 
 ```cmd
 my-fl-project/
-├── app/
-│   ├── training/
-│   │   ├── main.py             # Lógica Flower (Python puro)
-│   │   └── startup.sh          # Script Bash (Solo instalación de dependencias)
-│   └── inference/
-│       ├── app.py              # API FastAPI
-│       ├── Dockerfile
-│       └── requirements.txt
-├── infra/
-│   ├── network.py              # Contexto: Red
-│   ├── storage.py              # Contexto: Storage
-│   ├── compute.py              # Contexto: VM (Lee startup.sh + main.py)
-│   ├── serverless.py           # Contexto: Cloud Run
-│   └── __main__.py             # Orquestador
-├── Pulumi.yaml
+├── app/                        # Código que se ejecuta en la Máquina Virtual (VM)
+│   ├── inference_api.py        # API FastAPI que sirve el modelo para predicciones en tiempo real.
+│   └── server.py               # Servidor Flower que orquesta el entrenamiento y agrega los pesos.
+├── infra/                      # Infraestructura como Código (Pulumi)
+│   ├── index.ts                # Definición de recursos (VM, Buckets, Redes, Cloud Run).
+│   ├── package.json            # Dependencias de Node.js para Pulumi.
+│   ├── Pulumi.yaml             # Configuración del proyecto Pulumi.
+│   └── startup.sh              # Script de inicio de la VM (instala dependencias y arranca servicios).
+├── frontend/                   # (Implícito en tu Dockerfile) Interfaz de Usuario
+│   ├── app.py                  # Interfaz de chat con Streamlit.
+│   └── Dockerfile              # Configuración para containerizar el frontend.
+├── client.py                   # Script del cliente que entrena el modelo localmente.
+└── dataset.csv                 # Datos locales (PROMISE_extended6.csv) para entrenamiento.
+
 ```
 
-## IaC
+### Descripción de Archivos Clave
 
-- **Mandar Docker a GCloud**
+- **`server.py`**: Inicia el servidor `flwr`, gestiona las rondas de entrenamiento, agrega los pesos de los modelos de los clientes, guarda el modelo final (`.pth`) y lo sube automáticamente al Bucket de GCP.
+- **`inference_api.py`**: Una API REST construida con FastAPI. Carga el modelo entrenado (desde disco o descargándolo del Bucket) y ofrece un endpoint `/predict` para clasificar texto nuevo.
+- **`client.py`**: Se ejecuta en las máquinas locales de los usuarios. Carga los datos, entrena el modelo usando la GPU local y envía solo los pesos (no los datos) al servidor.
+- **`index.ts`**: El cerebro de la infraestructura. Crea la red VPC, el firewall, la VM para el servidor, el Bucket de almacenamiento y despliega el Frontend en Cloud Run.
+
+---
+
+## Despliegue de Infraestructura (IaC con Pulumi)
+
+Utilizamos **Pulumi** para crear toda la infraestructura en Google Cloud con un solo comando.
+
+### 1. Prerrequisitos y Configuración
+
+Asegúrate de tener instalado `gcloud CLI`, `pulumi` y `docker`.
 
 ```bash
-gcloud config set project mi-app-tofu-123456
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com containerregistry.googleapis.com
+# Autenticarse en Google Cloud
+gcloud auth login
+gcloud config set project project-id
+
+# Habilitar servicios necesarios
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com containerregistry.googleapis.com compute.googleapis.com
+gcloud auth configure-docker
 ```
 
-- **Iniciar Pulumi**
+### 2. Ejecutar Pulumi
+
+Navega a la carpeta `infra/` y ejecuta:
 
 ```bash
-gcloud config set project mi-app-tofu-123456
+cd infra
+
+# Inicializar stack (solo la primera vez)
 pulumi login --local
 pulumi stack init dev
 
+# Configurar variables de región y proyecto
 pulumi config set gcp:project mi-app-tofu-123456
 pulumi config set gcp:region us-central1
+
+# Instalar dependencias y desplegar
 npm install
 pulumi install
-gcloud auth configure-docker
-gcloud services enable run.googleapis.com cloudbuild.googleapis.com containerregistry.googleapis.com
 pulumi up
 ```
 
-IP Externa de Instancia fl-training-node-6927d8a: 35.193.14.101
+### ¿Qué hace Pulumi internamente?
 
-IP Externa de Serveless fl-inference-api-2f04e1f: https://fl-inference-api-2f04e1f-601659189313.us-central1.run.app
+Al ejecutar `pulumi up`, el script `index.ts` realiza automáticamente lo siguiente:
 
-## Cliente
+1. **Crea un Bucket GCS:** Llamado `models-bucket` con control de versiones activado para guardar los modelos entrenados.
+2. **Configura la Red:** Crea una VPC y subred segura, abriendo solo los puertos necesarios (22 SSH, 8080 Flower, 8000 API).
+3. **Aprovisiona la VM (Compute Engine):** Levanta una instancia Debian, inyecta el código de `server.py` e `inference_api.py` y ejecuta el `startup.sh` para instalar dependencias Python y arrancar los servicios.
+4. **Despliega el Frontend (Cloud Run):** Construye la imagen Docker de la app de Streamlit, la sube al registro y la despliega como un servicio Serverless público, conectándolo automáticamente con la IP de la VM.
 
-```bash
-pip install flwr torch numpy
-python client.py
-```
+---
 
-## Terminal 1: Server (VM on Cloud)
+## Recursos en Google Cloud
 
-- Deploy Infrastructure with Pulumi
+Una vez finalizado el despliegue, tendrás los siguientes recursos operativos:
 
-```sh
-cd infrastructure
-pulumi up
-```
+### Máquina Virtual (ML Server)
 
-`Note:` Copy Public IP of the created VM
+Encargada de orquestar el entrenamiento y servir la API de inferencia.
 
-- Connect to the VM with ssh
+![Instancia VM en GCloud](.docs/image.png)
 
-```sh
-gcloud compute ssh smogollon@ml-server-b010e71 --zone us-central1-a
-```
+### Storage Bucket
 
-- Install dependencies
+Almacén persistente donde el servidor guarda automáticamente el modelo `mpnet_fed_requirements.pth` al finalizar el entrenamiento. Esto asegura que el modelo sobreviva si la VM se reinicia.
 
-```sh
-sudo apt update
-sudo apt install python3-venv -y
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install flwr==1.5.0
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install transformers datasets pandas numpy scikit-learn
-```
+![Modelo entrenado en Bucket GCloud](.docs/image-1.png)
 
-- Start the server
+### Cloud Run (Frontend)
 
-```sh
-cd train
-python server.py
-```
+Interfaz web accesible públicamente que permite a los usuarios interactuar con el modelo.
 
-## Terminal 2: Client (Edge Device)
+![Serverless en GCloud con Pagina Web](.docs/image-2.png)
 
-- Install dependencies
+---
 
-```sh
-python3 -m venv venv
-source venv/bin/activate
-pip install accelerate
-pip install flwr==1.5.0 transformers datasets torch pandas numpy scikit-learn
-```
+## Ejecución de Clientes (Entrenamiento)
 
-- Change the server IP address in `client.py`
+Para iniciar el proceso de aprendizaje federado, necesitas ejecutar clientes locales que se conecten al servidor en la nube.
 
-```python
-SERVER_IP = "<PASTE_SERVER_PUBLIC_IP_HERE>"
-```
-
-- Start the client
-
-```sh
-cd train
-python client.py
-```
-
-## Terminal 3: Download Model Trained
-
-- After training is complete
-
-```sh
-gcloud compute scp smogollon@ml-server-b010e71:~/mpnet_fed_requirements.pth ./ --zone us-central1-a
-```
+### 1. Preparar Entorno Local (Con soporte GPU)
 
 ```bash
-# 1. Crear el entorno llamado 'fl-gpu' con Python 3.10
+# 1. Crear entorno conda
 conda create -n fl-gpu python=3.10 -y
-
-# 2. Activar el entorno
 conda activate fl-gpu
 
-# 3. Instalar PyTorch con soporte para CUDA 12.4
-# (Tu driver 12.8 es compatible hacia atrás con 12.4, que es la versión estable de PyTorch)
+# 2. Instalar PyTorch con soporte CUDA (Ajustar versión según tus drivers)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# 4. Instalar Flower (versión compatible con tu servidor), Transformers y Data
+# 3. Instalar librerías del proyecto
 pip install flwr==1.5.0 transformers datasets pandas numpy scikit-learn accelerate
 
+# 4. Verificar GPU
 python -c "import torch; print(f'CUDA disponible: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}')"
 ```
 
-```sh
+---
+
+### 2. Configurar y Ejecutar Clientes
+
+Edita el archivo `client.py` en tu entorno local y actualiza la variable `SERVER_PUBLIC_IP` con la dirección IP pública que te devolvió Pulumi (output `backendIp`).
+
+```python
+# client.py
+# ...
+SERVER_PUBLIC_IP = "34.171.XXX.XXX" # <--- Reemplazar con tu IP de VM en Gcloud
+# ...
+```
+
+Abre dos terminales diferentes y ejecuta un cliente en cada una:
+
+```bash
+# Terminal 1
+python client.py 0
+
+# Terminal 2
+python client.py 1
+
+```
+
+El servidor espera un mínimo de 2 clientes. Una vez conectados, comenzará el entrenamiento federado.
+
+Aquí verás cómo cada cliente entrena con sus datos locales y envía los pesos al servidor.
+
+![Ejecucion CLiente 0](.docs/image-6.png)
+
+![CLiente 1](.docs/image-5.png)
+
+---
+
+### 3. Verificación en el Servidor (Logs de VM)
+
+Una vez finalizado el entrenamiento, puedes acceder a la Máquina Virtual en Google Cloud para verificar que todo ocurrió correctamente en el lado del servidor.
+
+Primero, conéctate vía SSH:
+
+```bash
+gcloud compute ssh --zone "us-central1-a" "ml-server-XXXX" --project "mi-app-tofu-123456"
+
+```
+
+#### A. Verificar Entrenamiento y Subida al Bucket
+
+Ejecuta el siguiente comando para ver el log del servidor Flower. Aquí podrás confirmar que las rondas finalizaron y que el modelo se subió a Google Cloud Storage.
+
+```bash
 cat /app/server.log
+```
+
+![Log Server VM](.docs/image-7.png)
+
+_El log muestra las métricas de las 3 rondas y el mensaje de éxito al guardar el modelo._
+
+![Model Guardado en BUcket](.docs/image-8.png)
+
+_Al final del log, se confirma la subida automática al Bucket para persistencia._
+
+#### B. Verificar API de Inferencia
+
+Ejecuta este comando para ver el log de la API. Aquí confirmarás que la API recibió la notificación del servidor y recargó el nuevo modelo "en caliente" sin apagarse.
+
+```bash
 cat /app/api.log
 ```
+
+![Cat de API](.docs/image-9.png)
+
+_El log muestra que la API inició correctamente y luego procesó la petición `/reload_model` exitosamente._
+
+---
+
+## Inferencia y Pruebas
+
+Una vez que el entrenamiento finaliza (3 rondas por defecto), el servidor guarda el modelo y recarga la API automáticamente. Puedes ir a la URL proporcionada por Cloud Run para probar el modelo.
+
+**Interfaz Web:**
+Escribe un requisito y el sistema te dirá si es Funcional o No Funcional junto con el nivel de confianza.
+
+![Pagina Web de Inferencia](.docs/image-3.png)
+
+---
+
+## Author
+
+- **Braulio Nayap Maldonado Casilla** - [GitHub Profile](https://github.com/ShinjiMC)
+- **Sergio Daniel Mogollon Caceres** - [GitHub Profile](https://github.com/i-am-sergio)
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
