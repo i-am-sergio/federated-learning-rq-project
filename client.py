@@ -1,103 +1,218 @@
 import flwr as fl
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from collections import OrderedDict
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import pandas as pd
 import numpy as np
+from datasets import Dataset
+import random
+import warnings
+warnings.filterwarnings('ignore')
+import sys
+# ====================================================
+# CONFIGURACIÓN DEL CLIENTE
+# ====================================================
+CLIENT_ID = 0  # Cambiar para cada cliente
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
 
-# -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN Y DATOS (Tus "Valores Generados")
-# -----------------------------------------------------------------------------
-
-# AQUI va tu lógica para cargar los valores que generaste.
-# Por ahora simulamos datos falsos para que el código funcione ya mismo.
-def load_data():
-    print("Cargando datos locales generados...")
-    # Simulación: 100 muestras, 10 características cada una
-    # Reemplaza 'x_train' con tus valores generados reales
-    x_train = torch.randn(100, 10) 
-    y_train = torch.randint(0, 2, (100,)) # Etiquetas ficticias (0 o 1)
+# ====================================================
+# FUNCIONES AUXILIARES
+# ====================================================
+def cargar_datos_cliente(client_id, total_clientes=2):
+    """Carga PROMISE_extended6, filtra y particiona para el cliente"""
     
-    # Creamos un DataLoader simple
-    train_loader = torch.utils.data.DataLoader(
-        list(zip(x_train, y_train)), batch_size=32, shuffle=True
-    )
-    return train_loader
+    # 1. Cargar el CSV
+    try:
+        df = pd.read_csv('PROMISE_extended6.csv')
+    except FileNotFoundError:
+        print("⚠️ No se encontró PROMISE_extended6.csv, creando datos dummy...")
+        data = {'RequirementText': ['System must be fast'] * 100, 'class': ['NF'] * 100}
+        df = pd.DataFrame(data)
 
-# Definimos un modelo simple que coincida con tus datos (Input: 10 -> Output: 2)
-class SimpleModel(nn.Module):
-    def __init__(self):
-        super(SimpleModel, self).__init__()
-        self.fc = nn.Linear(10, 2) # Ajusta '10' al tamaño de tus valores
+    # --- AGREGAR ESTA LÍNEA (IMPORTANTE) ---
+    # Mezclamos los datos aleatoriamente para que ambos clientes tengan de todo
+    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    # ---------------------------------------
 
-    def forward(self, x):
-        return self.fc(x)
+    # 2. Tu lógica de limpieza (F vs NF)
+    df['class'] = df['class'].apply(lambda x: 'F' if x == 'F' else 'NF')
+    
+    # 3. Mapear etiquetas
+    label2id = {'F': 0, 'NF': 1}
+    id2label = {0: 'F', 1: 'NF'}
+    df['label'] = df['class'].map(label2id)
+    
+    # 4. Dividir datos (Particionamiento)
+    indices = np.array_split(np.arange(len(df)), total_clientes)
+    idx_actual = client_id % total_clientes
+    client_indices = indices[idx_actual]
+    
+    # Imprimir para verificar que ahora sí están mezclados
+    subset = df.iloc[client_indices]
+    print(f"--> Cliente {client_id}: {len(subset)} datos. Dist: {subset['class'].value_counts().to_dict()}")
+    
+    return subset, label2id, id2label
 
-# -----------------------------------------------------------------------------
-# 2. DEFINICIÓN DEL CLIENTE FLOWER
-# -----------------------------------------------------------------------------
+def preparar_datasets(df, tokenizer):
+    """Prepara datasets para entrenamiento"""
+    def tokenize_function(examples):
+        return tokenizer(
+            examples["RequirementText"],
+            padding="max_length",
+            truncation=True,
+            max_length=32
+        )
+    
+    dataset = Dataset.from_pandas(df)
+    tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    
+    columnas_a_mantener = ["input_ids", "attention_mask", "labels"]
+    columnas_actuales = tokenized_dataset.column_names
+    columnas_a_eliminar = [c for c in columnas_actuales if c not in columnas_a_mantener and c != "label"]
+    
+    tokenized_dataset = tokenized_dataset.remove_columns(columnas_a_eliminar)
+    
+    if "label" in tokenized_dataset.column_names:
+        tokenized_dataset = tokenized_dataset.rename_column("label", "labels")
+    
+    tokenized_dataset.set_format("torch")
+    
+    trainloader = DataLoader(tokenized_dataset, batch_size=32, shuffle=True)
+    return trainloader
 
-class FlowerClient(fl.client.NumPyClient):
-    def __init__(self, model, train_loader):
-        self.model = model
-        self.train_loader = train_loader
-        self.device = torch.device("cpu") 
-
+# ====================================================
+# CLASE DEL CLIENTE FLOWER
+# ====================================================
+class FederatedClient(fl.client.NumPyClient):
+    def __init__(self, client_id):
+        self.client_id = client_id
+        
+        # Cargar datos del cliente
+        self.client_df, self.label2id, self.id2label = cargar_datos_cliente(client_id)
+        print(f"Cliente {client_id}: {len(self.client_df)} muestras")
+        print(f"Distribución: {self.client_df['class'].value_counts().to_dict()}")
+        
+        # Inicializar modelo y tokenizer
+        self.model_name = "microsoft/mpnet-base"
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        
+        # Preparar datasets
+        self.trainloader = preparar_datasets(self.client_df, self.tokenizer)
+        
+        # Inicializar modelo
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            self.model_name,
+            num_labels=2,
+            id2label=self.id2label,
+            label2id=self.label2id
+        )
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+        
+        print(f"CLIENTE INICIADO EN DISPOSITIVO: {self.device} ({torch.cuda.get_device_name(0) if self.device.type == 'cuda' else 'CPU'})")
+        
+        # Optimizador
+        self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=5e-5)
+        
     def get_parameters(self, config):
-        # Extrae los pesos del modelo para enviarlos al servidor
+        """Obtener parámetros del modelo"""
         return [val.cpu().numpy() for _, val in self.model.state_dict().items()]
-
+    
     def set_parameters(self, parameters):
-        # Actualiza el modelo local con los pesos que llegan del servidor
+        """Establecer parámetros del modelo"""
         params_dict = zip(self.model.state_dict().keys(), parameters)
-        state_dict = OrderedDict({k: torch.tensor(v) for k, v in params_dict})
+        state_dict = {k: torch.tensor(v) for k, v in params_dict}
         self.model.load_state_dict(state_dict, strict=True)
-
+    
     def fit(self, parameters, config):
-        # Paso 1: Actualizar modelo con pesos globales
+        """Entrenar el modelo localmente"""
+        # Establecer parámetros globales
         self.set_parameters(parameters)
         
-        # Paso 2: Entrenar con "valores generados" locales
-        criterion = nn.CrossEntropyLoss()
-        optimizer = optim.SGD(self.model.parameters(), lr=0.01)
+        # Configurar entrenamiento
         self.model.train()
+        epochs = config.get("epochs", 1)
         
-        print(f"Entrenando localmente con config: {config}")
-        for epoch in range(1):  # Entrenamos 1 época por ronda
-            for inputs, labels in self.train_loader:
-                optimizer.zero_grad()
-                outputs = self.model(inputs)
-                loss = criterion(outputs, labels)
+        # Entrenamiento por épocas
+        for epoch in range(epochs):
+            total_loss = 0
+            for batch in self.trainloader:
+                # Mover batch al dispositivo
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                
+                # Forward pass
+                self.optimizer.zero_grad()
+                outputs = self.model(**batch)
+                loss = outputs.loss
+                
+                # Backward pass
                 loss.backward()
-                optimizer.step()
-
-        # Paso 3: Devolver pesos actualizados al servidor EC2
-        return self.get_parameters(config={}), len(self.train_loader.dataset), {}
-
+                self.optimizer.step()
+                
+                total_loss += loss.item()
+            
+            print(f"Cliente {self.client_id}, Época {epoch+1}: Loss = {total_loss/len(self.trainloader):.4f}")
+        
+        # Devolver nuevos parámetros y métricas
+        return self.get_parameters({}), len(self.client_df), {"loss": total_loss/len(self.trainloader)}
+    
     def evaluate(self, parameters, config):
-        # Evaluación simple (opcional)
+        """Evaluar el modelo localmente"""
         self.set_parameters(parameters)
-        loss = 0.0
-        return float(loss), len(self.train_loader.dataset), {"accuracy": 0.5}
+        self.model.eval()
+        
+        losses = []
+        correct_predictions = 0
+        total_samples = 0
+        
+        with torch.no_grad():
+            for batch in self.trainloader:
+                batch = {k: v.to(self.device) for k, v in batch.items()}
+                outputs = self.model(**batch)
+                
+                # Calcular pérdida
+                loss = outputs.loss
+                losses.append(loss.item())
+                
+                # Calcular precisión
+                logits = outputs.logits
+                predictions = torch.argmax(logits, dim=-1)
+                correct_predictions += (predictions == batch["labels"]).sum().item()
+                total_samples += len(batch["labels"])
+        
+        accuracy = correct_predictions / total_samples if total_samples > 0 else 0
+        loss = np.mean(losses)
+        
+        print(f"Cliente {self.client_id}: Accuracy = {accuracy:.4f}, Loss = {loss:.4f}")
+        
+        return float(loss), len(self.client_df), {"accuracy": float(accuracy)}
 
-# -----------------------------------------------------------------------------
-# 3. CONEXIÓN AL SERVIDOR (EC2)
-# -----------------------------------------------------------------------------
-
+# ====================================================
+# EJECUCIÓN DEL CLIENTE
+# ====================================================
 def main():
-    # 1. Cargar datos y modelo
-    train_loader = load_data()
-    model = SimpleModel()
+    # Leer argumentos: python client.py <CLIENT_ID>
+    if len(sys.argv) > 1:
+        client_id = int(sys.argv[1])
+    else:
+        client_id = 0 # Default
+    
+    # IMPORTANTE: Aquí pegas la IP que te dio Pulumi (backendIp)
+    # Ejemplo: "34.123.45.67"
+    SERVER_PUBLIC_IP = "34.171.220.231" 
 
-    # 2. Iniciar cliente
-    # IMPORTANTE: Cambia la IP por la de tu servidor en Google Cloud
-    SERVER_ADDRESS = "35.193.14.101:8080" 
+    print(f"Iniciando Cliente {client_id} conectando a {SERVER_PUBLIC_IP}...")
+
+    client = FederatedClient(client_id)
     
-    print(f"Conectando al servidor en {SERVER_ADDRESS}...")
-    
+    # Iniciar conexión con Flower
     fl.client.start_numpy_client(
-        server_address=SERVER_ADDRESS,
-        client=FlowerClient(model, train_loader),
+        server_address=f"{SERVER_PUBLIC_IP}:8080",
+        client=client
     )
 
 if __name__ == "__main__":

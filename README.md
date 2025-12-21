@@ -26,25 +26,21 @@ my-fl-project/
 ```bash
 gcloud config set project mi-app-tofu-123456
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com containerregistry.googleapis.com
-gcloud builds submit --tag gcr.io/mi-app-tofu-123456/fl-inference:latest app/inference
 ```
 
 - **Iniciar Pulumi**
 
 ```bash
+gcloud config set project mi-app-tofu-123456
 pulumi login --local
 pulumi stack init dev
 
 pulumi config set gcp:project mi-app-tofu-123456
 pulumi config set gcp:region us-central1
-pulumi config set app:dockerImage "gcr.io/mi-app-tofu-123456/fl-inference:latest"
-pulumi config set app:modelName "microsoft/mpnet-base"
-pulumi config set app:rounds "3"
-
-python3 -m venv venv
-source venv/bin/activate
-pip install pulumi pulumi-gcp
-
+npm install
+pulumi install
+gcloud auth configure-docker
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com containerregistry.googleapis.com
 pulumi up
 ```
 
@@ -126,4 +122,26 @@ python client.py
 
 ```sh
 gcloud compute scp smogollon@ml-server-b010e71:~/mpnet_fed_requirements.pth ./ --zone us-central1-a
+```
+
+```bash
+# 1. Crear el entorno llamado 'fl-gpu' con Python 3.10
+conda create -n fl-gpu python=3.10 -y
+
+# 2. Activar el entorno
+conda activate fl-gpu
+
+# 3. Instalar PyTorch con soporte para CUDA 12.4
+# (Tu driver 12.8 es compatible hacia atrás con 12.4, que es la versión estable de PyTorch)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# 4. Instalar Flower (versión compatible con tu servidor), Transformers y Data
+pip install flwr==1.5.0 transformers datasets pandas numpy scikit-learn accelerate
+
+python -c "import torch; print(f'CUDA disponible: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0)}')"
+```
+
+```sh
+cat /app/server.log
+cat /app/api.log
 ```
