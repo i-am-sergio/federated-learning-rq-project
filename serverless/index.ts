@@ -33,8 +33,11 @@ const predictFunction = new gcp.cloudfunctionsv2.Function("requirement-classifie
     serviceConfig: {
         maxInstanceCount: 3,
         minInstanceCount: 0,
-        availableMemory: "2Gi", // Necesario para cargar MPNet en RAM
-        timeoutSeconds: 60,
+        // Aumentamos a 4Gi para estar seguros durante la carga del modelo
+        availableMemory: "4Gi", 
+        // Aumentamos el timeout a 120 segundos para dar tiempo a la carga de pesos
+        timeoutSeconds: 120,
+        // IMPORTANTE: Asegúrate de que el puerto no esté bloqueado (Cloud Run usa 8080 internamente)
     },
 });
 

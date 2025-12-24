@@ -32,6 +32,21 @@ cd train
 python server.py 
 ```
 
+- Start prediction server in background process
+```sh
+nohup python predict_server.py > predict_server.log 2>&1 & # Iniciar
+ps aux | grep predict_server.py # Verificar que esté corriendo
+pgrep -f predict_server.py # Obtener el PID
+kill <PID> # Detener el proceso
+```
+
+- Test API
+```sh
+curl -X POST http://34.9.5.148:5000/predict \
+     -H "Content-Type: application/json" \
+     -d '{"text": "The system shall be modular to facilitate easy updates and maintenance."}'
+```
+
 ## Terminal 2: Client (Edge Device)
 
 - Install dependencies

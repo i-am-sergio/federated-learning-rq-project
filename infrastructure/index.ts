@@ -16,7 +16,7 @@ const firewall = new gcp.compute.Firewall("allow-ssh-flower", {
     network: vpc.id,
     allows: [{
         protocol: "tcp",
-        ports: ["22", "8080"],
+        ports: ["22", "8080", "5000"],
     }],
     sourceRanges: ["0.0.0.0/0"],
     targetTags: ["server-node"], 
@@ -39,6 +39,7 @@ const vmInstance = new gcp.compute.Instance("ml-server", {
         accessConfigs: [{}], 
     }],
 });
+
 
 export const publicIp = vmInstance.networkInterfaces.apply(ni => ni[0].accessConfigs![0].natIp);
 export const instanceName = vmInstance.name;
