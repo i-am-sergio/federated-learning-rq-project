@@ -1,4 +1,35 @@
-# federated-learning-rq-project
+# Federated Learning and Computation Offloading for Requirements Classification
+
+## Terminal 1: Deploy Infrastructure
+- Deploy Infrastructure with Pulumi
+```sh
+cd infrastructure
+pulumi up
+```
+`Note:` Copy Public IP of the created VM
+
+- List VMs to get their names
+```sh
+gcloud compute instances list
+```
+
+## Terminal 2: Cloud Server (VM on Cloud)
+
+- Connect to the VM with ssh
+```sh
+gcloud compute ssh <CLOUD_VM_NAME> --zone us-central1-a
+```
+
+## Terminal 3: Fog Server (VM on Edge)
+
+- Connect to the VM with ssh
+```sh
+gcloud compute ssh <FOG_VM_NAME> --zone us-central1-b
+```
+
+
+
+<!-- # federated-learning-rq-project
 
 ## Terminal 1: Server (VM on Cloud)
 
@@ -74,4 +105,4 @@ python client.py
 - After training is complete
 ```sh
 gcloud compute scp smogollon@ml-server-b010e71:~/mpnet_fed_requirements.pth ./ --zone us-central1-a
-```
+``` -->
