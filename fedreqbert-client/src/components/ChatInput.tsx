@@ -1,72 +1,64 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from "react";
+import { IoMdSend } from "react-icons/io";
+import { GoPaperclip } from "react-icons/go";
 
-interface ChatInputProps {
-  onSend: (text: string) => void;
-  disabled: boolean;
-}
+type ChatInputProps = {
+  onSend: (message: string) => void;
+};
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSend, disabled }) => {
-  const [input, setInput] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+const ChatInput: React.FC<ChatInputProps> = ({ onSend }) => {
+  const [inputValue, setInputValue] = useState("");
 
-  const handleSubmit = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (input.trim() && !disabled) {
-      onSend(input);
-      setInput("");
-      if (textareaRef.current) textareaRef.current.style.height = '24px'; // Reset height
+  const handleSend = () => {
+    if (inputValue.trim()) {
+      onSend(inputValue); 
+      setInputValue("");
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter" && inputValue.trim()) {
+      event.preventDefault();
+      handleSend();
     }
   };
-
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      // Limitamos la altura máxima
-      const scrollHeight = textareaRef.current.scrollHeight;
-      textareaRef.current.style.height = `${Math.min(scrollHeight, 200)}px`;
-    }
-  }, [input]);
-
+  
   return (
-    <div className="fixed bottom-0 left-0 w-full bg-gradient-to-t from-gray-900 via-gray-900 to-transparent pb-6 pt-10 px-4 z-20">
-      <div className="max-w-3xl mx-auto">
-        {/* El contenedor maneja el borde visual al hacer foco (focus-within) */}
-        <div className="relative flex items-end w-full p-3 bg-[#40414f] border border-gray-600/50 rounded-xl shadow-lg focus-within:border-gray-500/80 focus-within:ring-1 focus-within:ring-gray-500/80 transition-all">
-          
-          <textarea
-            ref={textareaRef}
-            // AQUÍ ESTÁ EL CAMBIO: agregué 'outline-none focus:outline-none' y aseguré 'focus:ring-0'
-            className="w-full max-h-[200px] py-[2px] pr-10 pl-2 bg-transparent border-0 outline-none focus:outline-none focus:ring-0 text-gray-100 placeholder-gray-400 resize-none m-0 overflow-y-hidden"
-            rows={1}
-            placeholder="Escribe un requisito para clasificar..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={disabled}
-            style={{ height: '24px' }} 
-          />
-          
-          <button
-            onClick={() => handleSubmit()}
-            disabled={disabled || !input.trim()}
-            className="absolute right-3 bottom-2.5 p-1.5 rounded-md text-gray-400 hover:bg-gray-900/50 hover:text-gray-200 disabled:opacity-40 disabled:hover:bg-transparent transition-all"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
-              <path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94 60.519 60.519 0 0018.445-8.986.75.75 0 000-1.218A60.517 60.517 0 003.478 2.405z" />
-            </svg>
-          </button>
-        </div>
-        <div className="text-center mt-2">
-            <p className="text-[10px] text-gray-500">FedReqBERT puede cometer errores. Considera verificar la información importante.</p>
-        </div>
+    <div className="p-0 bg-transparent">
+      <div className="flex items-center p-2 bg-[#27292b] border border-gray-600 rounded-full shadow-lg">
+        
+        {/* Botón Adjuntar (Placeholder) */}
+        <button
+          className="p-2 text-gray-400 hover:text-white rounded-full transition-colors mx-1"
+          onClick={() => console.log("Adjuntar no implementado")}
+          title="Adjuntar archivo de requisitos"
+        >
+          <GoPaperclip className="w-6 h-6" />
+        </button>
+
+        <input
+          type="text"
+          className="flex-1 bg-transparent text-white text-lg px-4 focus:outline-none placeholder-gray-500"
+          placeholder="Escribe un requisito (ej: The system must...)"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+        />
+
+        <button
+          className={`p-3 rounded-full transition-all duration-200 flex items-center justify-center ${
+            inputValue.trim()
+              ? "bg-violet-600 text-white hover:bg-violet-700 shadow-violet-500/20 shadow-lg"
+              : "bg-gray-700 text-gray-500 cursor-not-allowed"
+          }`}
+          onClick={handleSend}
+          disabled={!inputValue.trim()}
+        >
+          <IoMdSend className="w-5 h-5 ml-0.5" /> {/* Ajuste visual leve del icono */}
+        </button>
       </div>
     </div>
   );
 };
+
+export default ChatInput;
