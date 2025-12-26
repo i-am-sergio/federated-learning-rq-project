@@ -1,3 +1,0 @@
-config:
-  gcp:project: k8s-lab-474002
-  gcp:region: us-central1
