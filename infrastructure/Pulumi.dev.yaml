@@ -1,2 +1,3 @@
 config:
-  gcp:project: k8s-lab-474002
+  gcp:project: mi-app-tofu-123456
+encryptionsalt: v1:GrFrIH2Vtng=:v1:Q8tNhCeHq8IUXo2T:y6K8JFTFbNysPvYpADUyAo2du2wkDg==

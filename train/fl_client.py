@@ -183,7 +183,7 @@ def main():
     else:
         client_id = CLIENT_ID
     
-    SERVER_PUBLIC_IP = "34...."
+    SERVER_PUBLIC_IP = "34.121.92.169"
 
     # Iniciar cliente
     client = FederatedClient(client_id)

@@ -106,3 +106,5 @@ python client.py
 ```sh
 gcloud compute scp smogollon@ml-server-b010e71:~/mpnet_fed_requirements.pth ./ --zone us-central1-a
 ``` -->
+
+gcloud compute scp promise_nfr.csv fog-server-a665278:~/ --zone us-central1-b

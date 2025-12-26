@@ -1,0 +1,4 @@
+encryptionsalt: v1:zpvU1eR0LaU=:v1:dzEQcCGxZkhSQiBx:Ytzn8whBJA/M/kujqSuhpUkE4Cql/w==
+config:
+  gcp:project: mi-app-tofu-123456
+  gcp:region: us-central1

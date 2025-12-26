@@ -7,24 +7,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 1. Instalar PyTorch CPU
+# 1. Instalar PyTorch CPU (Ligero)
 RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-# 2. Instalar resto de dependencias
+# 2. Instalar dependencias python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --- NUEVO PASO: "Hornear" (Bake) el modelo base en la imagen ---
-# Esto descarga config.json, tokenizer.json y vocab.txt y los guarda en /app/model_base
-# Así NO necesitamos pedirlos a HuggingFace cuando arranque el servidor.
-RUN python -c "from transformers import AutoTokenizer, AutoModelForSequenceClassification; \
-    save_path = './model_base'; \
-    print('⬇️ Descargando modelo base durante el build...'); \
-    AutoTokenizer.from_pretrained('microsoft/mpnet-base').save_pretrained(save_path); \
-    AutoModelForSequenceClassification.from_pretrained('microsoft/mpnet-base').save_pretrained(save_path)"
-
-# 3. Copiar código
+# 3. Copiar código fuente (app.py)
 COPY app.py .
+
+# Nota: Ya NO copiamos ni descargamos modelos aquí. 
+# La imagen queda "agnóstica" al modelo.
 
 ENV PORT=8080
 
