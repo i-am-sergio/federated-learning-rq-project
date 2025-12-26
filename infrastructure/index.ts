@@ -60,14 +60,22 @@ sudo apt-get install -y python3-pip python3-venv git
 
 # Crear entorno virtual
 mkdir -p /app
+chmod 777 /app
 cd /app
 python3 -m venv venv
 source venv/bin/activate
 
 # Instalar dependencias base (CPU version para ahorrar espacio/tiempo en demo)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install flwr==1.5.0 transformers datasets pandas numpy scikit-learn google-cloud-storage requests flask flask-cors
+pip install flwr transformers datasets pandas numpy scikit-learn google-cloud-storage requests flask flask-cors
+
+# --- CONFIGURACIÓN DE ENTORNO ---
+echo "export MODEL_BUCKET_NAME=${modelsBucket.name}" >> /app/.env
+echo "source /app/.env" >> /app/venv/bin/activate
+
+chmod -R 777 /app
 `;
+// flwr==1.5.0
 
 // ====================================================
 // 5. INSTANCIAS DE COMPUTO
