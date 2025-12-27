@@ -3,7 +3,7 @@ import pickle
 import os
 import json
 import requests
-import traceback # Para ver el error real en los logs
+import traceback
 from google.cloud import storage
 
 # Configuración
@@ -50,14 +50,13 @@ try:
             model_multi = pickle.load(f)
     print("✅ Modelos cargados en memoria")
 except Exception as e:
-    # Capturamos el error (ej: versión de pickle incorrecta)
     load_error = str(e)
     print(f"❌ ERROR CRÍTICO CARGANDO MODELOS LOCALES: {load_error}")
     print(traceback.format_exc())
-    # No hacemos 'raise', dejamos que siga para que pueda hacer offloading
 
 @functions_framework.http
 def fog_predict(request):
+    # CORS
     if request.method == 'OPTIONS':
         headers = {
             'Access-Control-Allow-Origin': '*',
@@ -75,9 +74,9 @@ def fog_predict(request):
     target_url = CLOUD_RUN_MULTI_URL if mode == 'multiclass' else CLOUD_RUN_BINARY_URL
 
     # --- LÓGICA DE FALLBACK ---
-    # Si los modelos locales fallaron al cargar, hacemos OFFLOADING DIRECTO
+    # Si los modelos locales no existen, OFF-LOAD directo
     if model_bin is None or model_multi is None:
-        print(f"⚠️ Modelos locales rotos o no cargados. Forzando Cloud Run. Razón: {load_error}")
+        print(f"⚠️ Modelos locales no disponibles. Forzando Cloud Run. Razón: {load_error}")
         return call_cloud_run(target_url, text, mode)
 
     # Selección del modelo local
@@ -85,27 +84,59 @@ def fog_predict(request):
     
     # 1. Inferencia Local Intentada
     try:
+        # Obtener probabilidades
         probs = active_model.predict_proba([text])[0]
-        confidence = max(probs)
-        pred_idx = int(probs.argmax())
-        raw_label = active_model.classes_[pred_idx]
-        pred_label = str(raw_label)
         
+        # Casting explícito a tipos nativos de Python para evitar error de JSON
+        confidence = float(max(probs))
+        pred_idx = int(probs.argmax())
+        
+        # Obtener etiqueta cruda
+        raw_label = active_model.classes_[pred_idx]
+        
+        # --- LÓGICA ESPECÍFICA POR MODO ---
+        threshold_conf = 0.0
+        threshold_len = 0
+        pred_label = ""
+
+        if mode == 'multiclass':
+            # MODO MULTICLASE
+            # Labels son strings ('SE', 'US', etc.) según tu entrenamiento
+            pred_label = str(raw_label) 
+            
+            # Requisitos: Confianza > 0.50 Y Largo < 120
+            threshold_conf = 0.3
+            threshold_len = 120
+            
+        else:
+            # MODO BINARIO
+            # Labels son 0 (F) o 1 (NF) según tu entrenamiento
+            # 0 -> F, 1 -> NF
+            if str(raw_label) == '0':
+                pred_label = "F"
+            else:
+                pred_label = "NF"
+                
+            # Requisitos: Confianza >= 0.70 Y Largo < 100
+            threshold_conf = 0.65
+            threshold_len = 120
+
         # 2. Decisión de Offloading
-        if confidence >= 0.70 and len(text) < 150:
+        # Si la confianza supera el umbral Y el texto es corto => RESPONDER DESDE FOG
+        if confidence > threshold_conf and len(text) < threshold_len:
             return (json.dumps({
-                "prediction": pred_label,       # Ahora es un string puro
-                "confidence": confidence,       # Ahora es un float puro
+                "prediction": pred_label,
+                "confidence": confidence,
                 "source": f"FOG (FastModel - {mode})",
                 "offloaded": False
             }), 200, {'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json'})
+        
         else:
-            # Poca confianza o texto largo
             return call_cloud_run(target_url, text, mode)
 
     except Exception as e:
         print(f"❌ Error durante inferencia local: {e}")
-        # Si falla, salvamos la petición enviando al Cloud
+        print(traceback.format_exc())
         return call_cloud_run(target_url, text, mode)
 
 def call_cloud_run(url, text, mode):

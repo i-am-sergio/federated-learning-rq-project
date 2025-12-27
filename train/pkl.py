@@ -44,7 +44,7 @@ def main():
         except:
             print("Error: No encuentro 'promise_nfr.csv' ni 'PROMISE_extended6.csv'")
             return
-
+    df = df.dropna(subset=['RequirementText', 'class'])
     X = df['RequirementText']
 
     # 3. Preparando Etiquetas
@@ -59,7 +59,13 @@ def main():
     # 4. Entrenando FastModel
     print("Entrenando Modelo (TF-IDF + LR)...")
     # Aumentamos max_iter para asegurar convergencia en multiclase
-    model = make_pipeline(TfidfVectorizer(), LogisticRegression(max_iter=1000))
+    # model = make_pipeline(TfidfVectorizer(), LogisticRegression(max_iter=1000))
+    # class_weight='balanced': Equilibra automáticamente las clases
+    # ngram_range=(1, 2): Aprende palabras sueltas Y pares de palabras (ej: "response time")
+    model = make_pipeline(
+    TfidfVectorizer(ngram_range=(1, 2)), 
+    LogisticRegression(max_iter=1000, class_weight='balanced')
+)
     model.fit(X, y)
 
     # 5. Guardando localmente

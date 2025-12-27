@@ -134,7 +134,7 @@ const fogFunction = new gcp.cloudfunctionsv2.Function("fog-node-fn", {
       MODEL_BUCKET_NAME: bucketName,
       CLOUD_RUN_BINARY_URL: binaryService.uri,
       CLOUD_RUN_MULTI_URL: multiclassService.uri,
-      FORCE_UPDATE: "v5",
+      FORCE_UPDATE: "v8",
     },
   },
 });
