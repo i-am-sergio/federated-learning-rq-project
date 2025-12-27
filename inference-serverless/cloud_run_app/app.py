@@ -8,92 +8,129 @@ app = Flask(__name__)
 
 # Configuración
 BUCKET_NAME = os.environ.get("MODEL_BUCKET_NAME")
+# Variable clave: Define si este contenedor servirá Binario o Multiclase
+SERVING_MODE = os.environ.get("SERVING_MODE", "binary") 
 
 TEMPLATE_PREFIX = "templates/mpnet-base"
-WEIGHTS_FILE = "mpnet_fed_requirements.pth"
 
-# Rutas Locales (En Cloud Run /tmp es un disco en memoria RAM)
+# Nombres de archivos
+WEIGHTS_BINARY = "mpnet_fed_requirements.pth"
+WEIGHTS_MULTI = "mpnet_fed_multiclass.pth"
+
+# Rutas Locales
 LOCAL_BASE_PATH = "/tmp/model_base"
-LOCAL_WEIGHTS_PATH = f"/tmp/{WEIGHTS_FILE}"
+LOCAL_W_BIN = f"/tmp/{WEIGHTS_BINARY}"
+LOCAL_W_MULTI = f"/tmp/{WEIGHTS_MULTI}"
 
+# Mapeo de Clases
+LABELS_MULTI = ['A', 'F', 'FT', 'L', 'LF', 'MN', 'O', 'PE', 'PO', 'SC', 'SE', 'US']
+ID2LABEL_MULTI = {i: label for i, label in enumerate(LABELS_MULTI)}
 
 def download_folder_from_gcs(bucket_name, prefix, local_path):
-    """Descarga todos los archivos de una 'carpeta' en GCS"""
     storage_client = storage.Client()
     bucket = storage_client.bucket(bucket_name)
     blobs = bucket.list_blobs(prefix=prefix)
-    
     if not os.path.exists(local_path):
         os.makedirs(local_path)
-        
-    print(f"⬇️ Descargando plantilla desde gs://{bucket_name}/{prefix}...")
-    count = 0
     for blob in blobs:
-        if blob.name.endswith("/"): continue # Ignorar directorios virtuales
-        
-        # Obtener nombre de archivo limpio
+        if blob.name.endswith("/"): continue
         filename = os.path.basename(blob.name)
-        destination = os.path.join(local_path, filename)
-        
-        blob.download_to_filename(destination)
-        count += 1
-    print(f"✅ {count} archivos de plantilla descargados.")
+        blob.download_to_filename(os.path.join(local_path, filename))
 
-print("🚀 CLOUD RUN: Iniciando servicio de inferencia...")
+def download_file(bucket_name, blob_name, local_path):
+    if not os.path.exists(local_path):
+        print(f"⬇️ Descargando {blob_name}...")
+        try:
+            storage_client = storage.Client()
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            blob.download_to_filename(local_path)
+        except Exception as e:
+            print(f"⚠️ Error descargando {blob_name}: {e}")
 
-# 1. Descargar Plantilla Base (Config, Tokenizer) si no existe
+print(f"🚀 CLOUD RUN ({SERVING_MODE.upper()}): Iniciando servicio...")
+
+# 1. Descargar Plantilla Base (Común)
 if not os.path.exists(LOCAL_BASE_PATH):
     download_folder_from_gcs(BUCKET_NAME, TEMPLATE_PREFIX, LOCAL_BASE_PATH)
 
-# 2. Descargar Pesos Entrenados si no existen
-if not os.path.exists(LOCAL_WEIGHTS_PATH):
-    print(f"⬇️ Descargando pesos entrenados gs://{BUCKET_NAME}/{WEIGHTS_FILE}...")
-    storage_client = storage.Client()
-    bucket = storage_client.bucket(BUCKET_NAME)
-    blob = bucket.blob(WEIGHTS_FILE)
-    blob.download_to_filename(LOCAL_WEIGHTS_PATH)
+# 2. Descargar SOLO el peso necesario según el modo
+if SERVING_MODE == 'multiclass':
+    download_file(BUCKET_NAME, WEIGHTS_MULTI, LOCAL_W_MULTI)
+else:
+    download_file(BUCKET_NAME, WEIGHTS_BINARY, LOCAL_W_BIN)
 
-# 3. Cargar Modelo OFFLINE
-print("🧠 Cargando modelo PyTorch desde /tmp...")
+# 3. Carga de Modelo en Memoria
 try:
-    # Cargar tokenizer y config desde la carpeta local descargada
     tokenizer = AutoTokenizer.from_pretrained(LOCAL_BASE_PATH, local_files_only=True)
-    
-    # Cargar arquitectura base
-    model = AutoModelForSequenceClassification.from_pretrained(LOCAL_BASE_PATH, num_labels=2, local_files_only=True)
-    
-    # Cargar tus pesos entrenados (map_location='cpu' es vital en Cloud Run básico)
-    state_dict = torch.load(LOCAL_WEIGHTS_PATH, map_location=torch.device('cpu'))
-    model.load_state_dict(state_dict)
-    
-    model.eval()
-    print("✅ Modelo cargado exitosamente. Listo para recibir peticiones.")
 except Exception as e:
-    print(f"❌ ERROR CRÍTICO cargando modelo: {e}")
-    # No matamos la app aquí para que Cloud Run logee el error, pero fallará la request
+    print(f"❌ Error fatal cargando Tokenizer: {e}")
+    raise e
+
+model = None
+
+def load_model(weights_path, num_labels):
+    try:
+        # ignore_mismatched_sizes=True permite adaptar la arquitectura base
+        m = AutoModelForSequenceClassification.from_pretrained(
+            LOCAL_BASE_PATH, 
+            num_labels=num_labels, 
+            local_files_only=True,
+            ignore_mismatched_sizes=True 
+        )
+        if os.path.exists(weights_path):
+            state_dict = torch.load(weights_path, map_location=torch.device('cpu'))
+            m.load_state_dict(state_dict)
+            m.eval()
+            print(f"✅ Modelo {SERVING_MODE} cargado exitosamente.")
+            return m
+        else:
+            print(f"❌ Archivo no encontrado: {weights_path}")
+            return None
+    except Exception as e:
+        print(f"❌ Error cargando modelo: {e}")
+        return None
+
+# Cargar UN solo modelo
+if SERVING_MODE == 'multiclass':
+    model = load_model(LOCAL_W_MULTI, num_labels=12)
+else:
+    model = load_model(LOCAL_W_BIN, num_labels=2)
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    if model is None:
+        return jsonify({"error": "Model failed to load"}), 500
+
     try:
         data = request.get_json()
         text = data.get('text', '')
         
         inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
+        
         with torch.no_grad():
             outputs = model(**inputs)
             probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
-            conf, pred = torch.max(probs, dim=-1)
+            conf, pred_id = torch.max(probs, dim=-1)
+            
+        pred_idx = pred_id.item()
+        confidence = float(conf.item())
         
-        label = "NF" if pred.item() == 1 else "F"
+        # Decodificar etiqueta según el modo actual
+        if SERVING_MODE == 'multiclass':
+            label = ID2LABEL_MULTI.get(pred_idx, "UNKNOWN")
+        else:
+            label = "F" if pred_idx == 0 else "NF"
         
         return jsonify({
             "prediction": label,
-            "confidence": float(conf.item()),
-            "source": "CLOUD (DeepModel - MPNet)",
+            "confidence": confidence,
+            "source": f"CLOUD (DeepModel - {SERVING_MODE})",
             "offloaded": True
         })
+
     except Exception as e:
-        print(f"Error en inferencia: {e}")
+        print(f"Error inferencia: {e}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":

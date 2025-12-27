@@ -14,7 +14,6 @@ const files = fs.readdirSync(baseModelDir);
 
 files.forEach((fileName) => {
   const filePath = path.join(baseModelDir, fileName);
-  // Subimos cada archivo a la carpeta "templates/mpnet-base/" dentro del bucket
   new gcp.storage.BucketObject(`template-${fileName}`, {
     bucket: bucketName,
     name: `templates/mpnet-base/${fileName}`,
@@ -23,24 +22,24 @@ files.forEach((fileName) => {
   });
 });
 
-// 1. Artifact Registry (Para guardar la imagen Docker del Cloud Run)
 const repository = new gcp.artifactregistry.Repository("repo", {
   location: "us-central1",
   repositoryId: "fl-inference-repo",
   format: "DOCKER",
 });
 
-// 2. Construir y Subir Imagen Docker (Modelo Pesado)
+// Construir Imagen Docker (Se usa para ambos servicios)
 const image = new docker.Image("cloud-run-image", {
-  imageName: pulumi.interpolate`${repository.location}-docker.pkg.dev/${gcp.config.project}/${repository.repositoryId}/deep-model:v2`,
+  // SUBIMOS VERSIÓN para forzar el rebuild del app.py
+  imageName: pulumi.interpolate`${repository.location}-docker.pkg.dev/${gcp.config.project}/${repository.repositoryId}/deep-model:v7`,
   build: {
     context: "./cloud_run_app",
     platform: "linux/amd64",
   },
 });
 
-// 3. Desplegar Cloud Run (Servicio Pesado)
-const cloudRunService = new gcp.cloudrunv2.Service("deep-model-service", {
+// --- SERVICIO 1: BINARY (Ligero) ---
+const binaryService = new gcp.cloudrunv2.Service("deep-model-binary", {
   location: "us-central1",
   template: {
     containers: [
@@ -48,30 +47,62 @@ const cloudRunService = new gcp.cloudrunv2.Service("deep-model-service", {
         image: image.imageName,
         resources: {
           limits: {
-            cpu: "2", // 1 vCPU
-            memory: "4Gi", // 2GB RAM para MPNet
+            cpu: "1", // Binario requiere menos CPU
+            memory: "2Gi", // Solo carga 1 modelo pequeño
           },
-          cpuIdle: false, // esto es para no facturar CPU inactiva
+          cpuIdle: false,
         },
-        envs: [{ name: "MODEL_BUCKET_NAME", value: bucketName }],
+        envs: [
+          { name: "MODEL_BUCKET_NAME", value: bucketName },
+          { name: "SERVING_MODE", value: "binary" }, // CONFIGURACIÓN CLAVE
+        ],
       },
     ],
-    // Aumentar timeout de arranque por si la descarga es lenta
-    timeout: "600s",
-    maxInstanceRequestConcurrency: 10, // Puede atender 10 peticiones a la vez
+    timeout: "300s",
+    maxInstanceRequestConcurrency: 20,
   },
 });
 
-// Hacer público el Cloud Run (o restríngelo solo a la Cloud Function si prefieres)
-const runIam = new gcp.cloudrunv2.ServiceIamMember("run-invoker", {
-  location: cloudRunService.location,
-  name: cloudRunService.name,
+new gcp.cloudrunv2.ServiceIamMember("bin-invoker", {
+  location: binaryService.location,
+  name: binaryService.name,
   role: "roles/run.invoker",
   member: "allUsers",
 });
 
-// 4. Desplegar Cloud Function (Fog - Modelo Ligero)
-// Bucket para subir el código fuente de la función
+// --- SERVICIO 2: MULTICLASS (Pesado) ---
+const multiclassService = new gcp.cloudrunv2.Service("deep-model-multiclass", {
+  location: "us-central1",
+  template: {
+    containers: [
+      {
+        image: image.imageName,
+        resources: {
+          limits: {
+            cpu: "2", // Multiclase requiere más CPU
+            memory: "4Gi", // Requiere más memoria para 12 etiquetas
+          },
+          cpuIdle: false,
+        },
+        envs: [
+          { name: "MODEL_BUCKET_NAME", value: bucketName },
+          { name: "SERVING_MODE", value: "multiclass" }, // CONFIGURACIÓN CLAVE
+        ],
+      },
+    ],
+    timeout: "600s",
+    maxInstanceRequestConcurrency: 10,
+  },
+});
+
+new gcp.cloudrunv2.ServiceIamMember("multi-invoker", {
+  location: multiclassService.location,
+  name: multiclassService.name,
+  role: "roles/run.invoker",
+  member: "allUsers",
+});
+
+// --- FOG NODE (Orquestador) ---
 const sourceBucket = new gcp.storage.Bucket("fn-source-bucket", {
   location: "US",
   uniformBucketLevelAccess: true,
@@ -98,33 +129,21 @@ const fogFunction = new gcp.cloudfunctionsv2.Function("fog-node-fn", {
   },
   serviceConfig: {
     maxInstanceCount: 10,
-    availableMemory: "256Mi", // Muy poca memoria (barato)
+    availableMemory: "512Mi",
     environmentVariables: {
       MODEL_BUCKET_NAME: bucketName,
-      // Inyectamos la URL del Cloud Run dinámicamente
-      CLOUD_RUN_URL: cloudRunService.uri,
+      CLOUD_RUN_BINARY_URL: binaryService.uri,
+      CLOUD_RUN_MULTI_URL: multiclassService.uri,
+      FORCE_UPDATE: "v5",
     },
   },
 });
 
-// Hacer pública la función Fog (Tu punto de entrada)
-const fogIam = new gcp.cloudrunv2.ServiceIamMember("fog-invoker", {
+new gcp.cloudrunv2.ServiceIamMember("fog-invoker", {
   location: fogFunction.location,
-  name: fogFunction.name, // En v2, el servicio Cloud Run se llama igual que la función
+  name: fogFunction.name,
   role: "roles/run.invoker",
   member: "allUsers",
 });
 
-// Permisos para leer el Bucket de Modelos
-const project = pulumi.output(gcp.organizations.getProject({}));
-const defaultComputeSa = project.apply(
-  (p) => `${p.number}-compute@developer.gserviceaccount.com`
-);
-const bucketReader = new gcp.storage.BucketIAMMember("sa-model-reader", {
-  bucket: bucketName,
-  role: "roles/storage.objectViewer",
-  member: defaultComputeSa.apply((email) => `serviceAccount:${email}`),
-});
-
-// Exportar la URL que usarás en tu React App
 export const entryPointUrl = fogFunction.serviceConfig.apply((c) => c?.uri);

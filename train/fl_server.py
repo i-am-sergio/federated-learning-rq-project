@@ -12,21 +12,22 @@ warnings.filterwarnings('ignore')
 # FUNCIÓN AUXILIAR PARA SUBIR A GCS
 # ====================================================
 def upload_to_gcs(bucket_name, source_file_name, destination_blob_name):
-    """Sube un archivo al bucket de Google Cloud Storage."""
     try:
         storage_client = storage.Client()
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_filename(source_file_name)
-        print(f"✅ ÉXITO: {source_file_name} subido a gs://{bucket_name}/{destination_blob_name}")
+        print(f"EXITO: {source_file_name} subido a gs://{bucket_name}/{destination_blob_name}")
     except Exception as e:
-        print(f"❌ ERROR: Falló la subida a GCS: {e}")
+        print(f"ERROR: Fallo la subida a GCS: {e}")
 
 # ====================================================
 # ESTRATEGIA PERSONALIZADA
 # ====================================================
 class FederatedAverageCustom(strategy.FedAvg):
-    def __init__(self, min_fit_clients=2, min_evaluate_clients=2, **kwargs):
+    def __init__(self, num_labels=2, total_rounds=3, min_fit_clients=1, min_evaluate_clients=1, **kwargs):
+        self.num_labels = num_labels
+        self.total_rounds = total_rounds
         super().__init__(
             min_fit_clients=min_fit_clients,
             min_evaluate_clients=min_evaluate_clients,
@@ -34,43 +35,39 @@ class FederatedAverageCustom(strategy.FedAvg):
         )
     
     def aggregate_fit(self, server_round, results, failures):
-        # 1. Llamamos a la lógica de agregación que ya teníamos
         aggregated_parameters, metrics = super().aggregate_fit(server_round, results, failures)
+        
+        if aggregated_parameters is not None and server_round == self.total_rounds:
+            print("\n" + "*"*40)
+            print(f"GUARDANDO MODELO GLOBAL FINAL (Ronda {server_round})")
+            print("*"*40)
+            
+            ndarrays = fl.common.parameters_to_ndarrays(aggregated_parameters)
+            from transformers import AutoModelForSequenceClassification
+            
+            # Reconstruir modelo
+            model = AutoModelForSequenceClassification.from_pretrained(
+                "microsoft/mpnet-base", num_labels=self.num_labels
+            )
+            
+            params_dict = zip(model.state_dict().keys(), ndarrays)
+            state_dict = {k: torch.tensor(v) for k, v in params_dict}
+            model.load_state_dict(state_dict, strict=True)
+            
+            # Nombre del archivo final
+            filename = "mpnet_fed_multiclass.pth" if self.num_labels > 2 else "mpnet_fed_requirements.pth"
+            
+            # Guardar localmente
+            torch.save(model.state_dict(), filename)
+            print(f"Modelo guardado localmente: {filename}")
 
-        if aggregated_parameters is not None:
-            # 2. Si es la última ronda (Ronda 3), guardamos el modelo
-            if server_round == 3:
-                print("\n" + "*"*30)
-                print("GUARDANDO MODELO GLOBAL FINAL...")
-                print("*"*30)
-                
-                # Convertir parámetros agregados a tensores de PyTorch
-                # Primero convertimos de Parameters a lista de ndarrays
-                ndarrays = fl.common.parameters_to_ndarrays(aggregated_parameters)
-                
-                # Cargamos una estructura de modelo limpia de MPNet
-                from transformers import AutoModelForSequenceClassification
-                model = AutoModelForSequenceClassification.from_pretrained(
-                    "microsoft/mpnet-base", num_labels=2
-                )
-                
-                # Cargamos los pesos promediados en el modelo
-                params_dict = zip(model.state_dict().keys(), ndarrays)
-                state_dict = {k: torch.tensor(v) for k, v in params_dict}
-                model.load_state_dict(state_dict, strict=True)
-                
-                # Guardamos el modelo completo o solo los pesos
-                filename = "mpnet_fed_requirements.pth"
-                torch.save(model.state_dict(), filename)
-                print(f"💾 Modelo guardado localmente: {filename}")
-
-                # Subimos el modelo a GCS
-                bucket_name = os.getenv("MODEL_BUCKET_NAME")
-                if bucket_name:
-                    print(f"☁️ Iniciando subida al Bucket: {bucket_name}...")
-                    upload_to_gcs(bucket_name, filename, filename)
-                else:
-                    print("⚠ ADVERTENCIA: Variable 'MODEL_BUCKET_NAME' no encontrada. No se subió a la nube.")
+            # Subir a Google Cloud Storage
+            bucket_name = os.getenv("MODEL_BUCKET_NAME")
+            if bucket_name:
+                print(f"Subiendo a Bucket: {bucket_name}...")
+                upload_to_gcs(bucket_name, filename, filename)
+            else:
+                print("ADVERTENCIA: Variable 'MODEL_BUCKET_NAME' no encontrada.")
         
         return aggregated_parameters, metrics
     
@@ -126,22 +123,41 @@ def get_evaluate_fn():
 # CONFIGURACIÓN DEL SERVIDOR
 # ====================================================
 def main():
+    import sys
+    
+    usar_multiclase = False
+    if len(sys.argv) > 1 and sys.argv[1] == "1":
+        usar_multiclase = True
+    
+    num_labels = 12 if usar_multiclase else 2
+    
+    if usar_multiclase:
+        num_labels = 12
+        num_rounds = 5 
+        epochs_per_round = 3
+    else:
+        num_labels = 2
+        num_rounds = 3
+        epochs_per_round = 1
+    
     # Configurar estrategia
     strategy = FederatedAverageCustom(
+        num_labels=num_labels,
+        total_rounds=num_rounds,
         fraction_fit=1.0,  # Usar todos los clientes disponibles para entrenamiento
         fraction_evaluate=1.0,  # Usar todos los clientes para evaluación
         min_fit_clients=1,  # Mínimo 2 clientes para entrenamiento
         min_evaluate_clients=1,  # Mínimo 2 clientes para evaluación
         min_available_clients=1,  # Esperar al menos 2 clientes
-        evaluate_fn=get_evaluate_fn(),  # Función de evaluación global
-        on_fit_config_fn=lambda rnd: {"epochs": 1},  # 1 época por ronda
+        evaluate_fn=None,  # Función de evaluación global
+        on_fit_config_fn=lambda rnd: {"epochs": epochs_per_round}, # época por ronda
         on_evaluate_config_fn=lambda rnd: {"batch_size": 32},
         initial_parameters=None,  # Inicializar con pesos pre-entrenados
     )
     
     # Configuración del servidor
-    config = fl.server.ServerConfig(num_rounds=3)  # 3 rondas de federación
-    
+    config = fl.server.ServerConfig(num_rounds=num_rounds) # rondas de federación
+    print(f"INICIANDO SERVIDOR - MODO: {'MULTICLASE (12)' if usar_multiclase else 'BINARIO (F/NF)'}")
     print("\n" + "="*60)
     print("INICIANDO SERVIDOR FEDERADO")
     print("="*60)
@@ -155,7 +171,7 @@ def main():
         server_address="0.0.0.0:8080",
         config=config,
         strategy=strategy,
-        grpc_max_message_length=1024*1024*1024  # 1GB para modelos grandes
+        grpc_max_message_length=1024*1024*1024
     )
 
 if __name__ == "__main__":
