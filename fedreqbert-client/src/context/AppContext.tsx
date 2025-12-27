@@ -14,7 +14,6 @@ interface AppContextProps {
   setMessage: React.Dispatch<React.SetStateAction<string>>;
   selectedModel: string;
   setSelectedModel: React.Dispatch<React.SetStateAction<string>>;
-  // sendData ahora devuelve la estructura completa o null
   sendData: (textToSend: string) => Promise<PredictionResponse | null>;
 }
 
@@ -24,24 +23,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [message, setMessage] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<string>('Binary Model');
 
-  // La URL de tu función Fog
+  // URL del Fog Node (La misma para ambos casos según tu curl)
   const API_URL = 'https://fog-node-fn-c159cd6-y5dphoazqq-uc.a.run.app';
 
   const sendData = async (textToSend: string): Promise<PredictionResponse | null> => {
+    
+    // Construcción del Payload dinámico
+    const payload: { text: string; mode?: string } = {
+      text: textToSend
+    };
+
+    // Si el modelo es Multiclass, agregamos el campo 'mode'
+    if (selectedModel === 'Multiclass Model') {
+      payload.mode = 'multiclass';
+    }
+
+    console.log(`Sending request to [${selectedModel}] at ${API_URL} with payload:`, payload);
+
     try {
-      // Petición POST con la estructura {"text": "..."}
-      const response = await axios.post(API_URL, {
-        text: textToSend,
-        // model: selectedModel // Podrías enviar esto si tu backend lo soporta en el futuro
-      });
+      const response = await axios.post(API_URL, payload);
 
       console.log('Response from server:', response.data);
-      
-      // Retornamos los datos tal cual vienen del backend
       return response.data as PredictionResponse;
       
     } catch (error) {
-      console.error('Error sending data:', error);
+      console.error(`Error sending data to ${selectedModel}:`, error);
       return null;
     }
   };
