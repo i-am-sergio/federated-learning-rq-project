@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+type: conference-paper
+title: "Clasificación de Requisitos Mediante Aprendizaje Federado y Computación en Niebla con Offloading Basado en Confianza"
+authors:
+  - family-names: Mogollon Caceres
+    given-names: Sergio Daniel
+    email: smogollon@unsa.edu.pe
+    affiliation: Universidad Nacional de San Agustín de Arequipa
+  - family-names: Maldonado Casilla
+    given-names: Braulio Nayap
+    email: bmaldonadoc@unsa.edu.pe
+    affiliation: Universidad Nacional de San Agustín de Arequipa
+date-released: 2026-03

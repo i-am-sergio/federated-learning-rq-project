@@ -1,0 +1,17 @@
+runtime: nodejs20  # o nodejs18 según tu versión de Node
+
+handlers:
+  # Manejar archivos estáticos de Vite (js, css, assets)
+  - url: /assets
+    static_dir: dist/assets
+  
+  # Manejar otros archivos estáticos comunes
+  - url: /(.*\.(ico|svg|png|jpg|jpeg|gif|webp|json))$
+    static_files: dist/\1
+    upload: dist/.*\.(ico|svg|png|jpg|jpeg|gif|webp|json)$
+  
+  # Para Single Page Application (SPA) - todas las rutas van a index.html
+  - url: /.*
+    static_files: dist/index.html
+    upload: dist/index.html
+    secure: always

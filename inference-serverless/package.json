@@ -1,0 +1,16 @@
+{
+    "name": "inference-serverless",
+    "main": "index.ts",
+    "devDependencies": {
+        "@types/node": "^18",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "@pulumi/docker": "^4.11.0",
+        "@pulumi/gcp": "^9.0.0",
+        "@pulumi/pulumi": "^3.113.0",
+        "@types/mime": "^3.0.4",
+        "mime": "^3.0.0",
+        "mime-types": "^3.0.2"
+    }
+}
