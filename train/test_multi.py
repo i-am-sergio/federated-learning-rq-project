@@ -100,7 +100,7 @@ def run_tests():
                     
                     color = "\033[92m" if source == "FOG" else "\033[93m"
                     reset = "\033[0m"
-                    match_mark = "✅" if prediction == short_label else "❌"
+                    match_mark = "" if prediction == short_label else ""
 
                     print(f"{short_label:<5} | {text_preview:<40} | {chars_count:<5} | {color}{source:<7}{reset} | {prediction:<4} | {confidence:.2f}% {match_mark}")
                 
